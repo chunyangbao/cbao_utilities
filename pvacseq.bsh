@@ -1,0 +1,115 @@
+#!/bin/bash
+
+o=.
+p=1
+g='NetMHC'
+a='-e 9,10 -l 21 --net-chop-method cterm --netmhc-stab -m lowest -d full'
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-03-15"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input tab-separated file containing path of vcf file, HLA genotype and additional file (optional) in each line. This argument is required."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-g|--algorithms STR] The epitope prediction algorithms to use. Default: ${g}"
+        echo -e "`printf %-16s ` [-a|--arguments STR] Arguments for pvacseq. Default: ${a}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:g:a:
+LONG=help,version,in:,out:,parallels:,algorithms:,arguments:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -g|--algorithms)
+            g="$2"
+            shift 2
+            ;;
+        -a|--arguments)
+            a="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# TRUST
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+
+[[ ! -f ${o}/pvacseq.log ]] \
+ && echo 'pvacseq --version:' > ${o}/pvacseq.log \
+ && pvacseq --version &>> ${o}/pvacseq.log
+
+cat ${I} | while read i;do
+     ((n=n%${p})); ((n++==0)) && wait
+     i=(${i})
+     f=`echo ${i[0]} | sed 's#^.*/##;s#\.[^.]*$##;s#\.vcf$##'`
+     mkdir -p ${o}/${f}
+     echo '# '${i[0]} > ${o}/${f}/pvacseq.log
+     echo '# '${i[0]} > ${o}/${f}/pvacseq.sh
+     s=`bcftools query -l ${i[0]} | wc -l`
+     [[ ${s} -eq 1 ]] \
+      && echo "cp ${i[0]} ${o}/${f}/tmp.vcf " >> ${o}/${f}/pvacseq.sh \
+      || echo "bcftools view -Ov -s ${i[1]} ${i[0]} > ${o}/${f}/tmp.vcf " >> ${o}/${f}/pvacseq.sh
+     [[ ${#i[3]} -gt 0 ]] \
+      && echo "pvacseq run ${o}/${f}/tmp.vcf ${f} ${i[2]} ${g} ${o}/${f} ${a} -i ${i[3]}" >> ${o}/${f}/pvacseq.sh \
+      || echo "pvacseq run ${o}/${f}/tmp.vcf ${f} ${i[2]} ${g} ${o}/${f} ${a}" >> ${o}/${f}/pvacseq.sh
+     chmod 755 ${o}/${f}/pvacseq.sh
+     nohup sh -c ''${o}'/'${f}'/pvacseq.sh; \
+                  wait #!; \
+                  rm '${o}'/'${f}'/tmp.vcf' &>> ${o}/${f}/pvacseq.log &
+done
+### THE END ###

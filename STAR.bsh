@@ -1,0 +1,124 @@
+#!/bin/bash
+
+o=.
+p=1
+t=1
+a='--outFilterType BySJout --outFilterMultimapNmax 20 --alignSJoverhangMin 8 --alignSJDBoverhangMin 1 --outFilterMismatchNmax 999 --alignIntronMin 20 --alignIntronMax 1000000 --alignMatesGapMax 1000000 --outSAMstrandField intronMotif --outSAMattributes NH HI AS nM NM ch --outFilterMismatchNoverLmax 0.1 --chimSegmentMin 15 --chimJunctionOverhangMin 15 --readFilesCommand zcat --outFilterScoreMinOverLread 0.33 --outFilterMatchNminOverLread 0.33 --quantMode TranscriptomeSAM GeneCounts'
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-02-13"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input file containing a list of bam files. This argument is required."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-t|--threads INT] Number of threads. Default: ${t}"
+        echo -e "`printf %-16s ` [-r|--reference STR] Reference for STAR. This argument is required."
+        echo -e "`printf %-16s ` [-a|--arguments STR] Arguments for STAR. Default: ${a}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:t:r:a:
+LONG=help,version,in:,out:,parallels:,threads:,reference:,arguments:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -t|--threads)
+            t="$2"
+            shift 2
+            ;;
+        -r|--reference)
+            r="$2"
+            shift 2
+            ;;
+        -a|--arguments)
+            a="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# Main
+## output
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+## log
+[[ ! -f ${o}/STAR.log ]] \
+ && echo 'STAR --version:' > ${o}/STAR.log \
+ && STAR --version &>> ${o}/STAR.log
+## script
+[[ ! -f ${o}/STAR.sh ]] \
+ && echo '#!/bin/sh' &> ${o}/STAR.sh
+## column
+sample_id=`head -1 ${I} | tr -s '\t' '\n' | nl -nln | grep "sample_id" | cut -f 1`
+readFilesIn=`head -1 ${I} | tr -s '\t' '\n' | nl -nln | grep "readFilesIn" | cut -f 1`
+## separator
+IFS_old=${IFS}
+IFS=$'\t'
+## line
+cat ${I} | while read i;do
+     ((n=n%${p})); ((n++==0)) && wait
+     c=(${i})
+     f=${c[${sample_id}]}
+     echo '# '${i} > ${o}/${f}/STAR.log
+     echo '# '${i} > ${o}/${f}/STAR.sh
+     echo "STAR ${a} --runThreadN ${t} --genomeDir ${r} --readFilesIn ${c[${readFilesIn}]} --outFileNamePrefix ${o}/${f}/ " >> ${o}/${f}/STAR.sh
+     chmod 755 ${o}/${f}/STAR.sh
+     nohup sh -c ''${o}'/'${f}'/STAR.sh' 1> ${o}/${f}.STAR.stdout.log 2> ${o}/${f}.STAR.stderr.log &
+done
+
+IFS=${IFS_old}
+
+### THE END ###

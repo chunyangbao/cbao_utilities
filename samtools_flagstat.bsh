@@ -1,0 +1,99 @@
+#!/bin/bash
+
+o=.
+p=1
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-02-13"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input file containing a list of bam files. This argument is required."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:
+LONG=help,version,in:,out:,parallels:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# TRUST
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+
+[[ ! -f ${o}/samtools_flagstat.log ]] \
+ && echo 'samtools --version:' > ${o}/samtools_flagstat.log \
+ && samtools --version &>> ${o}/samtools_flagstat.log
+[[ ! -f ${o}/samtools_flagstat.sh ]] \
+ && echo '#!/bin/sh' &> ${o}/samtools_flagstat.sh
+
+cat ${I} | while read i;do
+     ((n=n%${p})); ((n++==0)) && wait
+     f=`echo ${i} | sed 's#^.*/##;s#\.[^.]*$##;s#\.sam$##;s#\.bam$##;s#\.cram$##'`
+     echo '# '${i} > ${o}/${f}.samtools_flagstat.log
+     echo '# '${i} > ${o}/${f}.samtools_flagstat.sh
+     echo "samtools flagstat ${i} > ${o}/${f}.samtools_flagstat.tsv" >> ${o}/${f}.samtools_flagstat.sh
+     chmod 755 ${o}/${f}.samtools_flagstat.sh
+     nohup sh -c ''${o}'/'${f}'.samtools_flagstat.sh; \
+                  wait #!; \
+                  cat '${o}'/'${f}'.samtools_flagstat.sh >> '${o}'/samtools_flagstat.sh; \
+                  rm '${o}'/'${f}'.samtools_flagstat.sh' &>> ${o}/${f}.samtools_flagstat.log &
+done
+
+### THE END ###

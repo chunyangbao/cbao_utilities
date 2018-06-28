@@ -1,0 +1,146 @@
+#!/bin/bash
+
+o=.
+p=1
+t=1
+c=/home/pgm/bin/OptiType_config.cbao.ini
+r=/home/ref/fasta/imgt_hg19/
+l=chr6:29640000-33120000 # hg19
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-01-30"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input file containing a list of bam files."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-t|--threads INT] Number of threads (unavailable). Default: ${t}"
+        echo -e "`printf %-16s ` [-c|--config FILE] Config file for OptiType. Default: ${c}"
+        echo -e "`printf %-16s ` [-r|--reference DIR] Reference directory for OptiType. Default: ${r}"
+        echo -e "`printf %-16s ` [-l|--loci STR] HLA loci for OptiType. Default (hg19): ${l}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:t:c:r:l:
+LONG=help,version,in:,out:,parallels:,threads:,config:,reference:,loci:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -t|--threads)
+            t="$2"
+            shift 2
+            ;;
+        -c|--config)
+            c="$2"
+            shift 2
+            ;;
+        -r|--reference)
+            r="$2"
+            shift 2
+            ;;
+        -l|--loci)
+            l="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# TRUST
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+
+[[ ! -f ${o}/OptiType.log ]] \
+ && echo "OptiType:" &> ${o}/OptiType.log \
+ && echo -e "\nstdout & stderr:" >> ${o}/OptiType.log
+[[ ! -f ${o}/OptiType.output.log ]] && > ${o}/OptiType.output.log
+[[ ! -f ${o}/OptiType.finished.log ]] && > ${o}/OptiType.finished.log
+[[ ! -f ${o}/OptiType.unfinished.log ]] && > ${o}/OptiType.unfinished.log
+
+cat ${I} | while read i;do
+     ((n=n%${p})); ((n++==0)) && wait
+     f=`basename ${i} | sed 's#\.[^.]*$##'`
+     mkdir -p ${o}/${f}
+     echo ${i} > ${o}/${f}/OptiType.log
+     nohup sh -c 'echo samtools: >> '${o}'/'${f}'/OptiType.log; \
+                  samtools view -@ '${t}' -hb '${i}' '${l}' > '${o}'/'${f}'/hla.bam 2>> '${o}'/'${f}'/OptiType.log; \
+                  samtools view -@ '${t}' -hb -f 4 '${i}' > '${o}'/'${f}'/unmapped.bam 2>> '${o}'/'${f}'/OptiType.log; \
+                  samtools merge -@ '${t}' -h '${o}'/'${f}'/hla.bam '${o}'/'${f}'/hla_unmapped.bam '${o}'/'${f}'/hla.bam '${o}'/'${f}'/unmapped.bam 2>> '${o}'/'${f}'/OptiType.log; \
+                  samtools bam2fq -n '${o}'/'${f}'/hla_unmapped.bam > '${o}'/'${f}'/hla_unmapped.fq 2>> '${o}'/'${f}'/OptiType.log; \
+                  \
+                  echo fastq: >> '${o}'/'${f}'/OptiType.log; \
+                  cat '${o}'/'${f}'/hla_unmapped.fq | sed s/[/\.][12]$// | paste - - - - | awk !a[$"0"]++ > '${o}'/'${f}'/hla_unmapped.tsv 2>> '${o}'/'${f}'/OptiType.log; \
+                  cat '${o}'/'${f}'/hla_unmapped.tsv | awk !a[$"1"]++ | tr "\t" "\n" > '${o}'/'${f}'/hla_unmapped.1.fq 2>> '${o}'/'${f}'/OptiType.log; \
+                  cat '${o}'/'${f}'/hla_unmapped.tsv | awk a[$"1"]++ | tr "\t" "\n" > '${o}'/'${f}'/hla_unmapped.2.fq 2>> '${o}'/'${f}'/OptiType.log; \
+                  \
+                  echo OptiTypePipeline: >> '${o}'/'${f}'/OptiType.log; \
+                  OptiTypePipeline.cbao.py -i '${o}'/'${f}'/hla_unmapped.1.fq '${o}'/'${f}'/hla_unmapped.2.fq --rna -v -o '${o}'/'${f}' -c '${c}' -a '${r}' &>> '${o}'/'${f}'/OptiType.log; \
+                  wait $!; \
+                  cat '${o}'/'${f}'/OptiType.log >> '${o}'/OptiType.log; \
+                  e=$(find '${o}'/'${f}' -regex .*_result\\.tsv$ -size +0); \
+                  "[" -f ${e} "]" \
+                   && echo "${e}" >> '${o}'/OptiType.output.log \
+                   && echo '${i}' >> '${o}'/OptiType.finished.log \
+                   || echo '${i}' >> '${o}'/OptiType.unfinished.log; \
+                  \
+                  rm '${o}'/'${f}'/hla.bam; \
+                  rm '${o}'/'${f}'/unmapped.bam; \
+                  rm '${o}'/'${f}'/hla_unmapped.bam; \
+                  rm '${o}'/'${f}'/hla_unmapped.fq; \
+                  rm '${o}'/'${f}'/hla_unmapped.tsv; \
+                  rm '${o}'/'${f}'/hla_unmapped.1.fq; \
+                  rm '${o}'/'${f}'/hla_unmapped.2.fq' &>> ${o}/${f}/OptiType.log &
+done
+
+### THE END ###

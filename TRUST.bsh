@@ -1,0 +1,123 @@
+#!/bin/bash
+
+p=1
+o=.
+r=/home/ref/fasta/imgt_hg19/
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.2"
+        echo "updated date: 2017-01-23"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input file containing a list of bam files."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-r|--reference DIR] Reference directory for .fa file of IMGT. Default: ${r}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:r:
+LONG=help,version,in:,out:,parallels:,reference:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -r|--reference)
+            r="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# TRUST
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+
+[[ ! -f ${o}/TRUSTer.log ]] \
+ && echo "TRUSTer:" &> ${o}/TRUSTer.log \
+ && echo -e "\nstdout & stderr:" >> ${o}/TRUSTer.log
+[[ ! -f ${o}/TRUSTer.output.log ]] && > ${o}/TRUSTer.output.log
+[[ ! -f ${o}/TRUSTer.finished.log ]] && > ${o}/TRUSTer.finished.log
+[[ ! -f ${o}/TRUSTer.unfinished.log ]] && > ${o}/TRUSTer.unfinished.log
+
+[[ ! -f ${o}/TRUSTcf.log ]] \
+ && echo "TRUSTcf:" &> ${o}/TRUSTcf.log \
+ && echo -e "\nstdout & stderr:" >> ${o}/TRUSTcf.log
+[[ ! -f ${o}/TRUSTcf.output.log ]] && > ${o}/TRUSTcf.output.log
+[[ ! -f ${o}/TRUSTcf.finished.log ]] && > ${o}/TRUSTcf.finished.log
+[[ ! -f ${o}/TRUSTcf.unfinished.log ]] && > ${o}/TRUSTcf.unfinished.log
+
+cat ${I} | while read i;do
+     ((n=n%${p})); ((n++==0)) && wait
+     f=`basename ${i} | sed 's#\.[^.]*$##'`
+     echo ${i} > ${o}/${f}.TRUSTer.log
+     nohup bash -c 'TRUSTer.cbao.py '${i}' '${o}' &>> '${o}'/'${f}'.TRUSTer.log; \
+                    cat '${o}'/'${f}'.TRUSTer.log >> '${o}'/TRUSTer.log; \
+                    rm '${o}'/'${f}'.TRUSTer.log; \
+                    [[ -f '${o}'/'${f}'.TRUST.bam ]] \
+                     && echo '${o}'/'${f}'.TRUST.bam > '${o}'/'${f}'.TRUSTcf.log \
+                     && echo '${o}'/'${f}'.TRUST.bam >> '${o}'/TRUSTer.output.log \
+                     && echo '${i}' >> '${o}'/TRUSTer.finished.log \
+                     || echo '${i}' >> '${o}'/TRUSTer.unfinished.log; \
+                    \
+                    [[ -f '${o}'/'${f}'.TRUSTcf.log ]] \
+                     && TRUSTcf.cbao.py '${r}' -f '${o}'/'${f}'.TRUST.bam -o '${o}' -a &>> '${o}'/'${f}'.TRUSTcf.log \
+                     && cat '${o}'/'${f}'.TRUSTcf.log >> '${o}'/TRUSTcf.log \
+                     && rm '${o}'/'${f}'.TRUSTcf.log; \
+                    [[ -f '${o}'/'${f}'.TRUST.bam.fa ]] \
+                     && echo '${o}'/'${f}'.TRUST.bam.fa >> '${o}'/TRUSTcf.output.log \
+                     && echo '${o}'/'${f}'.TRUST.bam >> '${o}'/TRUSTcf.finished.log \
+                     || echo '${o}'/'${f}'.TRUST.bam >> '${o}'/TRUSTcf.unfinished.log' &
+done
+
+### THE END ###

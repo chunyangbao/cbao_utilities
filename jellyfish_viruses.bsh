@@ -1,0 +1,127 @@
+#!/bin/bash
+
+o=.
+p=1
+t=1
+s=/home/ref/fasta/ncbi_EOV/isolate_virus.tsv
+a='x'
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-03-15"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input tab-separated file containing path of bam file. This argument is required."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory."
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-t|--threads INT] Number of threads. Default: ${t}"
+        echo -e "`printf %-16s ` [-s|--isolate STR] Input tab-separated file containing isolate and viruses in each column. Default: ${s}"
+        echo -e "`printf %-16s ` [-a|--arguments STR] Arguments for jellyfish. Default: ${a}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:p:t:s:a:
+LONG=help,version,in:,out:,parallels:,threads:,isolate:,arguments:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -t|--threads)
+            t="$2"
+            shift 2
+            ;;
+        -s|--isolate)
+            s="$2"
+            shift 2
+            ;;
+        -a|--arguments)
+            a="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# TRUST
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+
+[[ ! -f ${o}/jellyfish.log ]] \
+ && echo 'jellyfish --version:' > ${o}/jellyfish.log \
+ && jellyfish --version &>> ${o}/jellyfish.log
+
+cat ${I} | while read i;do
+    ((n=n%${p})); ((n++==0)) && wait
+    i=(${i})
+    f=`echo ${i[0]} | sed 's#^.*/##;s#\.[^.]*$##;s#\.bam$##'`
+    mkdir -p ${o}/${f}
+    echo '# '${i[0]} > ${o}/${f}.jellyfish.log
+    echo '# '${i[0]} > ${o}/${f}.jellyfish.sh
+    echo "echo Isolate > ${o}/${f}/isolate.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "samtools idxstats ${i[0]} | awk -F '\t' 'BEGIN{print \"Isolate\tCount\"}$"3">0{print $"1"\"\t\"$"3"}' > ${o}/${f}/samtools_idxstats.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "C=(\`cat ${o}/${f}/samtools_idxstats.tsv | awk -F '\t' 'FNR>1&&$"2">0{print $"1"}' | sed '/^ploy_/d;/\*/d'\`)" >> ${o}/${f}.jellyfish.sh
+    echo "for c in \${C[@]};do samtools view -ub ${i[0]} \${c} | samtools bam2fq - | seqtk seq -A - > ${o}/${f}/\${c}.fa ;done" >> ${o}/${f}.jellyfish.sh
+    echo "for c in \${C[@]};do jellyfish count -m 20 -s 3G -t ${t} -o ${o}/${f}/\${c}.jellyfish_count.hs ${o}/${f}/\${c}.fa ;done" >> ${o}/${f}.jellyfish.sh
+    echo "for c in \${C[@]};do jellyfish stats -o ${o}/${f}/\${c}.jellyfish_stats.tsv ${o}/${f}/\${c}.jellyfish_count.hs ;done" >> ${o}/${f}.jellyfish.sh
+    echo "for c in \${C[@]};do [[ \`cat ${o}/${f}/\${c}.jellyfish_stats.tsv | awk '$"1"~/^Distinct:/{print $"2"}'\` -gt 300 ]] && echo \${c} >> ${o}/${f}/isolate.tsv ;done" >> ${o}/${f}.jellyfish.sh
+    echo "merge_2file.R -a ${o}/${f}/isolate.tsv -b ${s} -J > ${o}/${f}/isolate_viruses.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "merge_2file.R -a ${o}/${f}/isolate_viruses.tsv -b ${o}/${f}/samtools_idxstats.tsv -J > ${o}/${f}.isolate_count.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "aggregate.R -I ${o}/${f}.isolate_count.tsv -f Count~Oncoviruses -F sum > ${o}/${f}.viruses_count.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "cat ${o}/${f}.isolate_count.tsv | awk -F '\t' -v m=\"${i[1]}\" 'FNR==1{print \"Isolate\tRPM\"}FNR>1{print $"1"\"\t\"$"2"\"\t\"$"3"/m*1000000}' > ${o}/${f}.isolate_RPM.tsv" >> ${o}/${f}.jellyfish.sh
+    echo "cat ${o}/${f}.viruses_count.tsv | awk -F '\t' -v m=\"${i[1]}\" 'FNR==1{print \"Isolate\tOncoviruses\tRPM\"}FNR>1{print $"1"\"\t\"$"2"/m*1000000}' > ${o}/${f}.viruses_RPM.tsv" >> ${o}/${f}.jellyfish.sh
+    
+    chmod 755 ${o}/${f}.jellyfish.sh
+    nohup bash -c ''${o}'/'${f}'.jellyfish.sh; \
+                  wait #!; \
+                  rm -rf '${o}'/'${f}'' &>> ${o}/${f}.jellyfish.log &
+done
+### THE END ###

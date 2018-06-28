@@ -1,0 +1,120 @@
+#!/bin/bash
+
+o=.
+s=nohup
+p=1
+a=''
+
+######################  function defination  ########################
+show_version()
+{
+        echo "version: 1.0"
+        echo "updated date: 2017-11-07"
+}
+
+show_usage()
+{
+        echo -e "`printf %-16s "Usage: $0"`"
+        echo -e "`printf %-16s ` [-h|--help] Print usage information and quit."
+        echo -e "`printf %-16s ` [-v|--version] Print version information and quit."
+        echo -e "`printf %-16s ` [-I|--in FILE] Input file (TSV file) containing 'sample_id' and 'read_file' in two separate columns. The possible value of 'read_file' column: '*.tsv'. This argument is required."
+        echo -e "`printf %-16s ` [-o|--out DIR] Output directory. Default: ${o}"
+        echo -e "`printf %-16s ` [-s|--submit STR] Command for submitting a job, e.g., qsub, nohup. Default: ${s}"
+        echo -e "`printf %-16s ` [-p|--parallels INT] Number of parallels. Default: ${p}"
+        echo -e "`printf %-16s ` [-a|--arguments STR] Arguments for sort. Default: ${a}"
+}
+
+getopt --test > /dev/null
+if [[ $? -ne 4 ]]; then
+    echo "Sorry, `getopt --test` failed in this environment."
+    exit 1
+fi
+
+SHORT=hvI:o:s:p:a:
+LONG=help,version,in:,out:,submit:,parallels:,arguments:
+
+# -temporarily store output to be able to check for errors
+# -activate advanced mode getopt quoting e.g. via “--options”
+# -pass arguments only via   -- "$@"   to separate them correctly
+PARSED=`getopt --options $SHORT --longoptions $LONG --name "$0" -- "$@"`
+if [[ $? -ne 0 ]]; then
+    # e.g. $? == 1
+    #  then getopt has complained about wrong arguments to stdout
+    exit 2
+fi
+# use eval with "$PARSED" to properly handle the quoting
+eval set -- "$PARSED"
+
+# now enjoy the options in order and nicely split until we see --
+while true; do
+    case "$1" in
+        -h|--help)
+            show_usage; exit 0
+            ;;
+        -v|-V|--version)
+            show_version; exit 0
+            ;;
+        -I|--in)
+            I="$2"
+            shift 2
+            ;;
+        -o|--out)
+            o="$2"
+            shift 2
+            ;;
+        -s|--submit)
+            s="$2"
+            shift 2
+            ;;
+        -p|--parallels)
+            p="$2"
+            shift 2
+            ;;
+        -a|--arguments)
+            a="$2"
+            shift 2
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Programming error"
+            exit 3
+            ;;
+    esac
+done
+
+# Main
+## output
+o=${o/%\//} # remove the last '/', if exist
+mkdir -p ${o}
+## column
+sample_id=`head -1 ${I} | tr -s '\t' '\n' | nl -nln | grep "sample_id" | cut -f 1`
+read_file=`head -1 ${I} | tr -s '\t' '\n' | nl -nln | grep "read_file" | cut -f 1`
+## separator
+IFS_old=${IFS}
+IFS=$'\t'
+## iteration
+cat ${I} | awk -F "\t" 'FNR>1' | \
+ while read i;do
+    ((n=n%${p})); ((n++==0)) && wait
+    c=(${i})
+    si=${c[$[sample_id-1]]}
+    rf=${c[$[read_file-1]]}
+    out_suffix=${rf/*\./}
+    mkdir -p ${o}/${si}
+    sort --help &> ${o}/${si}/${si}.sort.log
+    echo '#!/bin/sh' > ${o}/${si}/${si}.sort.sh
+    echo "LC_COLLATE=C sort ${a} ${rf} > ${o}/${si}/${si}.sort.${out_suffix}" >> ${o}/${si}/${si}.sort.sh
+    chmod 755 ${o}/${si}/${si}.sort.sh
+    if [ ${s} = "nohup" ] ; then
+        nohup ${o}/${si}/${si}.sort.sh 1> ${o}/${si}/${si}.sort.stdout.log 2> ${o}/${si}/${si}.sort.stderr.log &
+    elif [ ${s} = "qsub" ] ; then
+        qsub -V -cwd -o ${o}/${si}/${si}.sort.stdout.log -e ${o}/${si}/${si}.sort.stderr.log ${o}/${si}/${si}.sort.sh
+    fi
+done
+
+IFS=${IFS_old}
+
+### THE END ###
