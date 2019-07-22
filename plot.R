@@ -58,11 +58,20 @@ cn <- opt$options$col_name
 na <- opt$options$na_str
 rs <- opt$options$row_skip
 
-d <- ifelse(opt$args[1]=='-', 'file:///dev/stdin', opt$args[1])
-
 if(oq != 'auto') oq <- as.logical(oq)
 if(cn != 'auto') cn <- as.logical(cn)
 if(grepl("^[[:digit:]]+$", rs)) rs <- as.numeric(rs)
+
+# input
+## R version
+rv0 <- as.numeric(R.version$major)
+rv1 <- as.numeric(R.version$minor)
+## stdin
+if ((rv0<3)|((rv0==3)&(rv1<5))) {
+    d <- ifelse(opt$args[1]=='-', 'file:///dev/stdin', opt$args[1])
+} else {
+    d <- ifelse(opt$args[1]=='-', 'cat /dev/stdin', opt$args[1])
+}
 
 # read
 d <- fread(d, sep=cs, nrows=rn, header=cn, na.string=na, skip=rs, stringsAsFactors=sf, data.table=da)
