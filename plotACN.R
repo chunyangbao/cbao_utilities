@@ -126,8 +126,6 @@ e = ifelse(opt$args[2] == '-', 'file:///dev/stdin', opt$args[2]) # Data_path
 n = ifelse(n == '-', 'file:///dev/stdin', n) # Data_path
 
 # main
-
-
 ## read
 ### fread
 r_dt = fread(r, skip = 'CONTIG', sep = "\t", stringsAsFactors = FALSE, header = TRUE, check.names = FALSE, data.table = TRUE, showProgress = FALSE, verbose = FALSE)
@@ -137,11 +135,6 @@ if (file.exists(n)) sv_dt = fread(n, skip = 'CONTIG', sep = "\t", stringsAsFacto
 ## format
 ### remove unnecessary columns in r_dt
 r_dt = r_dt[, .(CONTIG, START, END, LOG2_COPY_RATIO)]
-### generate required columns in r_dt
-D = u*l + 2*(1-u)
-r_dt[, COPY_NUMBER := ((2^LOG2_COPY_RATIO)*D-2*(1-u))/(u)]
-### remove unnecessary rows in r_dt
-r_dt = r_dt[COPY_NUMBER > 0]
 ### generate required features in e_dt
 e_dt[, BAF := min(REF_COUNT, ALT_COUNT)/sum(REF_COUNT, ALT_COUNT), by = .(CONTIG, POSITION)]
 e_dt[, POSITION2 := POSITION]
@@ -175,16 +168,19 @@ if (grepl('[0-9]+', g)) {
 
 
 ## allelic CN
-### OV of BAF and COPY_NUMBER
+### average ploidy
+D = u*l + 2*(1-u)
+### map the het sites to each bin
 er_dt = foverlaps(e_dt, r_dt, type = 'within', nomatch=0L, by.x=c('CONTIG', 'POSITION', 'POSITION2'))
 ### call mean BAF
 mer_dt = er_dt[, .(mean(BAF)), by = .(CONTIG, START, END)]
 colnames(mer_dt)[colnames(mer_dt) == 'V1'] = 'MEAN_BAF'
 rem_dt = merge(r_dt, mer_dt, by = c('CONTIG', 'START', 'END'))
-### call allelic COPY_NUMBER
-rem_dt[, MAJOR_COPY_NUMBER := ((2^LOG2_COPY_RATIO) * D * (1 - MEAN_BAF) - 1) / u + 1, by = .(CONTIG, START, END)]
-rem_dt[, MINOR_COPY_NUMBER := ((2^LOG2_COPY_RATIO) * D * MEAN_BAF - 1) / u + 1, by = .(CONTIG, START, END)]
-rem_dt = rem_dt[MAJOR_COPY_NUMBER > 0 & MINOR_COPY_NUMBER > 0]
+### call MAJOR_COPY_NUMBER and MINOR_COPY_NUMBER
+rem_dt[, MAJOR_COPY_NUMBER := ((2^LOG2_COPY_RATIO) * D * (1 - MEAN_BAF) - 1) / u + 1]
+rem_dt[, MINOR_COPY_NUMBER := ((2^LOG2_COPY_RATIO) * D * MEAN_BAF - 1) / u + 1]
+rem_dt[, MAJOR_COPY_NUMBER := ifelse(MAJOR_COPY_NUMBER < 0, 0, MAJOR_COPY_NUMBER)]
+rem_dt[, MINOR_COPY_NUMBER := ifelse(MINOR_COPY_NUMBER < 0, 0, MINOR_COPY_NUMBER)]
 ### convert to data.frame (*checkpoint)
 rem_df = as.data.frame(rem_dt[, .(CONTIG, START, END, MAJOR_COPY_NUMBER, MINOR_COPY_NUMBER, MEAN_BAF)])
 ### determine copy-ratio midpoints
@@ -304,3 +300,8 @@ write.table(rem_df, paste0(o, '.plotACN.tsv'), sep='\t', row.names=FALSE, col.na
 #o = '/cga/bass/Chunyang/task/Matthew/WGS_EAC/SV_evolution/CZ_bkps__plotACV/plotACN'
 #g = 'chr17:35000000-45000000'
 #d = '/cga/bass/Chunyang/ref/hg19/Homo_sapiens_assembly19.dict'
+
+### filter by absolute copy number
+#D = u*l + 2*(1-u)
+#r_dt[, COPY_NUMBER := ((2^LOG2_COPY_RATIO)*D-2*(1-u))/(u)]
+#r_dt = r_dt[COPY_NUMBER > 0]
